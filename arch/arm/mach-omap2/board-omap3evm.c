@@ -69,10 +69,17 @@
 
 #ifdef CONFIG_MACH_FLASHBOARD
 #define OMAP3_EVM_TS_GPIO	177
+#elif defined CONFIG_MACH_WITS
+#define OMAP3_EVM_TS_GPIO	158
 #else
 #define OMAP3_EVM_TS_GPIO	175
 #endif
 
+#ifdef CONFIG_MACH_WITS
+#define OMAP3_EVM_EHCI_RESET    16	
+#else
+#define OMAP3_EVM_EHCI_RESET	21
+#endif
 #define OMAP3_EVM_EHCI_VBUS	22
 #define OMAP3_EVM_EHCI_SELECT	61
 
@@ -148,6 +155,9 @@ EXPORT_SYMBOL(get_omap3_evm_rev);
 
 static void __init omap3_evm_get_revision(void)
 {
+#ifdef CONFIG_MACH_WITS
+        omap3_evm_version = OMAP3EVM_BOARD_GEN_2;
+#else
 	void __iomem *ioaddr;
 	unsigned int smsc_id;
 
@@ -168,6 +178,7 @@ static void __init omap3_evm_get_revision(void)
 	default:
 		omap3_evm_version = OMAP3EVM_BOARD_GEN_2;
 	}
+#endif
 }
 
 #if defined(CONFIG_SMSC911X) || defined(CONFIG_SMSC911X_MODULE)
@@ -265,7 +276,11 @@ static inline void __init omap3evm_init_smsc911x(void) { return; }
 #define OMAP3EVM_LCD_PANEL_ENVDD	153
 #define OMAP3EVM_LCD_PANEL_QVGA		154
 #define OMAP3EVM_LCD_PANEL_RESB		155
+#ifdef CONFIG_MACH_WITS
+#define OMAP3EVM_LCD_PANEL_BKLIGHT_GPIO	159
+#else
 #define OMAP3EVM_LCD_PANEL_BKLIGHT_GPIO	210
+#endif
 #define OMAP3EVM_DVI_PANEL_EN_GPIO	199
 #endif
 
@@ -345,6 +360,69 @@ static void omap3_evm_disable_lcd(struct omap_dss_device *dssdev)
 	lcd_enabled = 0;
 }
 
+#elif defined CONFIG_MACH_WITS
+static void __init omap3_evm_display_init(void)
+{
+	int r;
+
+	r = gpio_request(OMAP3EVM_LCD_PANEL_BKLIGHT_GPIO, \
+			 "lcd_panel_bklight_gpio");
+	if (r) {
+		printk(KERN_ERR "failed to get lcd_panel_bklight_gpio\n");
+		return;
+	}
+	gpio_direction_output(OMAP3EVM_LCD_PANEL_BKLIGHT_GPIO, 1);
+}
+
+#define TWL_INTBR_GPBR1 0x0c
+#define TWL_INTBR_PMBR1 0x0d
+#define TWL_PWM_ON      0x00
+#define TWL_PWM_OFF     0x01
+
+static int omap3_evm_enable_lcd(struct omap_dss_device *dssdev)
+{
+	if (dvi_enabled) {
+		printk(KERN_ERR "cannot enable LCD, DVI is enabled\n");
+		return -EINVAL;
+	}
+        
+        gpio_set_value_cansleep(OMAP3EVM_LCD_PANEL_BKLIGHT_GPIO, 1);
+
+	omap_pm_set_min_bus_tput(&dssdev->dev, OCP_INITIATOR_AGENT, 400000);
+        
+        twl_i2c_write_u8(TWL4030_MODULE_PWM0, 0x1, TWL_PWM_ON);
+
+	lcd_enabled = 1;
+	return 0;
+}
+
+static void omap3_evm_disable_lcd(struct omap_dss_device *dssdev)
+{
+	omap_pm_set_min_bus_tput(&dssdev->dev, OCP_INITIATOR_AGENT, 0);
+        twl_i2c_write_u8(TWL4030_MODULE_PWM0, 0x1, TWL_PWM_OFF);
+
+        gpio_set_value_cansleep(OMAP3EVM_LCD_PANEL_BKLIGHT_GPIO, 0);
+
+	lcd_enabled = 0;
+}
+
+static int omap3evm_set_bl_intensity(struct omap_dss_device *dssdev, int level)
+{
+        unsigned char backlight_intensity;
+
+        if (level > 100)
+                return -1;
+
+        twl_i2c_write_u8(TWL4030_MODULE_INTBR, 0x04, TWL_INTBR_PMBR1);
+        twl_i2c_write_u8(TWL4030_MODULE_INTBR, 0x05, TWL_INTBR_GPBR1);
+        
+        backlight_intensity =
+                ((125 * (level)) / 100) + 2;
+
+        twl_i2c_write_u8(TWL4030_MODULE_PWM0, backlight_intensity , TWL_PWM_OFF);
+        
+        return 0;
+}
 #else /* #ifdef CONFIG_MACH_FLASHBOARD */
 static void __init omap3_evm_display_init(void)
 {
@@ -469,6 +547,8 @@ static struct omap_dss_device omap3_evm_lcd_device = {
 	.name			= "lcd",
 #ifdef CONFIG_MACH_FLASHBOARD
 	.driver_name		= "samsung_lms_panel",
+#elif defined CONFIG_MACH_WITS
+	.driver_name		= "wits_lcd_panel",
 #else
 	.driver_name		= "sharp_ls_panel",
 #endif
@@ -486,6 +566,7 @@ static struct omap_dss_device omap3_evm_lcd_device = {
 #endif
 };
 
+#ifndef CONFIG_MACH_WITS
 static int omap3_evm_enable_tv(struct omap_dss_device *dssdev)
 {
 	omap_pm_set_min_bus_tput(&dssdev->dev, OCP_INITIATOR_AGENT, 400000);
@@ -540,11 +621,14 @@ static struct omap_dss_device omap3_evm_dvi_device = {
 	.platform_enable	= omap3_evm_enable_dvi,
 	.platform_disable	= omap3_evm_disable_dvi,
 };
+#endif
 
 static struct omap_dss_device *omap3_evm_dss_devices[] = {
 	&omap3_evm_lcd_device,
+#ifndef CONFIG_MACH_WITS
 	&omap3_evm_tv_device,
 	&omap3_evm_dvi_device,
+#endif
 };
 
 static struct omap_dss_board_info omap3_evm_dss_data = {
@@ -626,6 +710,8 @@ static struct omap2_hsmmc_info mmc[] = {
 		.caps		= MMC_CAP_4_BIT_DATA,
 		.gpio_cd	= -EINVAL,
 #ifdef CONFIG_MACH_FLASHBOARD
+		.gpio_wp	= -EINVAL,
+#elif CONFIG_MACH_WITS
 		.gpio_wp	= 126,
 #else
 		.gpio_wp	= 63,
@@ -767,6 +853,27 @@ static struct twl4030_usb_data omap3evm_usb_data = {
 };
 
 #ifndef CONFIG_MACH_FLASHBOARD
+#ifdef CONFIG_MACH_WITS
+static uint32_t board_keymap[] = {
+	KEY(3, 6, KEY_VOLUMEUP),
+	KEY(2, 6, KEY_VOLUMEDOWN),
+        KEY(5, 6, KEY_HOME),
+        KEY(4, 6, KEY_BACK),
+        KEY(1, 6, KEY_MENU), 
+};
+
+static struct matrix_keymap_data board_map_data = {
+	.keymap			= board_keymap,
+	.keymap_size		= ARRAY_SIZE(board_keymap),
+};
+
+static struct twl4030_keypad_data omap3evm_kp_data = {
+	.keymap_data	= &board_map_data,
+	.rows		= 6, 
+	.cols		= 6, 
+	.rep		= 1,
+};
+#else
 static uint32_t board_keymap[] = {
 	KEY(0, 0, KEY_LEFT),
 	KEY(0, 1, KEY_DOWN),
@@ -800,6 +907,7 @@ static struct twl4030_keypad_data omap3evm_kp_data = {
 	.cols		= 4,
 	.rep		= 1,
 };
+#endif
 #endif
 
 static struct twl4030_madc_platform_data omap3evm_madc_data = {
@@ -917,6 +1025,9 @@ static struct regulator_init_data omap3_evm_vio = {
 #ifdef CONFIG_MACH_FLASHBOARD
 #define OMAP3EVM_WLAN_PMENA_GPIO       (139)
 #define OMAP3EVM_WLAN_IRQ_GPIO         (138)
+#elif defined CONFIG_MACH_WITS
+#define OMAP3EVM_WLAN_PMENA_GPIO       (161)
+#define OMAP3EVM_WLAN_IRQ_GPIO         (162)
 #else
 #define OMAP3EVM_WLAN_PMENA_GPIO       (150)
 #define OMAP3EVM_WLAN_IRQ_GPIO         (149)
@@ -958,11 +1069,33 @@ struct wl12xx_platform_data omap3evm_wlan_data __initdata = {
 };
 #endif
 
+#ifdef CONFIG_MACH_WITS
+static int omap3evm_batt_table[] = {
+/* 0 C*/
+30800, 29500, 28300, 27100,
+26000, 24900, 23900, 22900, 22000, 21100, 20300, 19400, 18700, 17900,
+17200, 16500, 15900, 15300, 14700, 14100, 13600, 13100, 12600, 12100,
+11600, 11200, 10800, 10400, 10000, 9630,  9280,  8950,  8620,  8310,
+8020,  7730,  7460,  7200,  6950,  6710,  6470,  6250,  6040,  5830,
+5640,  5450,  5260,  5090,  4920,  4760,  4600,  4450,  4310,  4170,
+4040,  3910,  3790,  3670,  3550
+};
+
+static struct twl4030_bci_platform_data omap3evm_bci_data = {
+	.battery_tmp_tbl	= omap3evm_batt_table,
+	.tblsize		= ARRAY_SIZE(omap3evm_batt_table),
+
+};
+#endif
+
 static struct twl4030_platform_data omap3evm_twldata = {
 	.irq_base	= TWL4030_IRQ_BASE,
 	.irq_end	= TWL4030_IRQ_END,
 
 	/* platform_data for children goes here */
+#ifdef CONFIG_MACH_WITS
+        .bci            = &omap3evm_bci_data,
+#endif
 #ifndef CONFIG_MACH_FLASHBOARD
 	.keypad		= &omap3evm_kp_data,
 #endif
@@ -1333,20 +1466,20 @@ static void __init omap3_evm_init(void)
 #ifndef CONFIG_MACH_FLASHBOARD
 	if (get_omap3_evm_rev() >= OMAP3EVM_BOARD_GEN_2) {
 		/* enable EHCI VBUS using GPIO22 */
-		omap_mux_init_gpio(22, OMAP_PIN_INPUT_PULLUP);
+		omap_mux_init_gpio(OMAP3_EVM_EHCI_VBUS, OMAP_PIN_INPUT_PULLUP);
 		gpio_request(OMAP3_EVM_EHCI_VBUS, "enable EHCI VBUS");
 		gpio_direction_output(OMAP3_EVM_EHCI_VBUS, 0);
 		gpio_set_value(OMAP3_EVM_EHCI_VBUS, 1);
 
 		/* Select EHCI port on main board */
-		omap_mux_init_gpio(61, OMAP_PIN_INPUT_PULLUP);
+		omap_mux_init_gpio(OMAP3_EVM_EHCI_SELECT, OMAP_PIN_INPUT_PULLUP);
 		gpio_request(OMAP3_EVM_EHCI_SELECT, "select EHCI port");
 		gpio_direction_output(OMAP3_EVM_EHCI_SELECT, 0);
 		gpio_set_value(OMAP3_EVM_EHCI_SELECT, 0);
 
 		/* setup EHCI phy reset config */
-		omap_mux_init_gpio(21, OMAP_PIN_INPUT_PULLUP);
-		ehci_pdata.reset_gpio_port[1] = 21;
+		omap_mux_init_gpio(OMAP3_EVM_EHCI_RESET, OMAP_PIN_INPUT_PULLUP);
+		ehci_pdata.reset_gpio_port[1] = OMAP3_EVM_EHCI_RESET;
 
 		/* EVM REV >= E can supply 500mA with EXTVBUS programming */
 		musb_board_data.power = 500;

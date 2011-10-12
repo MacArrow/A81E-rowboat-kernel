@@ -26,6 +26,12 @@ config PANEL_SAMSUNG_LMS700KF23
         help
           LCD Panel used on TI's DM37x PTI Board
 
+config PANEL_WITS
+        tristate "WITS A81E LCD Panel"
+        depends on OMAP2_DSS
+        help
+          LCD Panel used on WITS A81E tablet 
+
 config PANEL_TAAL
         tristate "Taal DSI Panel"
         depends on OMAP2_DSS_DSI
