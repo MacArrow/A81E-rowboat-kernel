@@ -466,7 +466,7 @@ static int __init twl4030_bci_probe(struct platform_device *pdev)
 		goto fail_bci_irq;
 	}
 
-	bci->transceiver = otg_get_transceiver();
+	bci->transceiver = otg_get_transceiver(0);      //FIXME: Add proper ID
 	if (bci->transceiver != NULL) {
 		bci->otg_nb.notifier_call = twl4030_bci_usb_ncb;
 		otg_register_notifier(bci->transceiver, &bci->otg_nb);
