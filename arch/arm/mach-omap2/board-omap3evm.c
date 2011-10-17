@@ -28,7 +28,7 @@
 #include <linux/leds.h>
 #include <linux/interrupt.h>
 #include <linux/mtd/nand.h>
-
+#include <linux/backlight.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/i2c/twl.h>
@@ -406,12 +406,12 @@ static void omap3_evm_disable_lcd(struct omap_dss_device *dssdev)
 	lcd_enabled = 0;
 }
 
-static int omap3evm_set_bl_intensity(struct omap_dss_device *dssdev, int level)
+static void omap3evm_set_bl_intensity(int level)
 {
         unsigned char backlight_intensity;
 
         if (level > 100)
-                return -1;
+                return;
 
         twl_i2c_write_u8(TWL4030_MODULE_INTBR, 0x04, TWL_INTBR_PMBR1);
         twl_i2c_write_u8(TWL4030_MODULE_INTBR, 0x05, TWL_INTBR_GPBR1);
@@ -421,7 +421,7 @@ static int omap3evm_set_bl_intensity(struct omap_dss_device *dssdev, int level)
 
         twl_i2c_write_u8(TWL4030_MODULE_PWM0, backlight_intensity , TWL_PWM_OFF);
         
-        return 0;
+        return;
 }
 #else /* #ifdef CONFIG_MACH_FLASHBOARD */
 static void __init omap3_evm_display_init(void)
@@ -561,7 +561,7 @@ static struct omap_dss_device omap3_evm_lcd_device = {
 	.max_backlight_level	= 100,
 	.platform_enable	= omap3_evm_enable_lcd,
 	.platform_disable	= omap3_evm_disable_lcd,
-#ifndef CONFIG_MACH_FLASHBOARD
+#if !((defined CONFIG_MACH_FLASHBOARD) || (defined CONFIG_MACH_WITS))
 	.set_backlight		= omap3evm_set_bl_intensity,
 #endif
 };
@@ -637,12 +637,32 @@ static struct omap_dss_board_info omap3_evm_dss_data = {
 	.default_device	= &omap3_evm_lcd_device,
 };
 
+#ifdef CONFIG_MACH_WITS
 static struct platform_device omap3_evm_dss_device = {
 	.name		= "omapdss",
 	.id		= -1,
 	.dev		= {
 		.platform_data = &omap3_evm_dss_data,
 	},
+};
+
+static struct generic_bl_info omap3evm_bl_platform_data = {
+        .name                   = "omap3evm-bklight",
+        .max_intensity          = 100,
+        .default_intensity      = 70,
+        .limit_mask             = 0,
+        .set_bl_intensity       = omap3evm_set_bl_intensity,
+        .kick_battery           = NULL,
+};
+#endif
+
+static struct platform_device omap3evm_bklight_device = {
+        .name           = "generic-bl",
+        .id             = -1,
+        .dev            = {
+                .parent         = &omap3_evm_dss_device.dev,
+                .platform_data  = &omap3evm_bl_platform_data,
+        },
 };
 
 #ifndef CONFIG_MACH_FLASHBOARD
@@ -1121,6 +1141,15 @@ static struct i2c_board_info __initdata omap3evm_i2c_boardinfo[] = {
 	},
 };
 
+static struct i2c_board_info __initdata omap3evm_i2c2_boardinfo[] = {
+#ifdef CONFIG_MACH_WITS
+        {
+                I2C_BOARD_INFO("cs42l52", 0x4a),
+        },
+#endif
+};
+
+
 static int __init omap3_evm_i2c_init(void)
 {
 	/*
@@ -1133,7 +1162,8 @@ static int __init omap3_evm_i2c_init(void)
 	omap_register_i2c_bus(1, 2600, omap3evm_i2c_boardinfo,
 			ARRAY_SIZE(omap3evm_i2c_boardinfo));
 	/* Bus 2 is used for Camera/Sensor interface */
-	omap_register_i2c_bus(2, 400, NULL, 0);
+	omap_register_i2c_bus(2, 400, omap3evm_i2c2_boardinfo,
+                        ARRAY_SIZE(omap3evm_i2c2_boardinfo));
 
 	omap_register_i2c_bus(3, 400, NULL, 0);
 	return 0;
@@ -1235,6 +1265,9 @@ static struct platform_device *omap3_evm_devices[] __initdata = {
 	&wl1271bt_audio_device,
 	&wl1271bt_codec_device,
 #endif
+#ifdef CONFIG_MACH_WITS
+        &omap3evm_bklight_device,
+#endif
 #ifdef CONFIG_MACH_FLASHBOARD
 	&keys_gpio,
 #endif
@@ -1307,9 +1340,12 @@ static struct mtd_partition omap3_evm_nand_partitions[] = {
 	},
 	{
 		.name		= "Boot Env-NAND",
-
-		.offset		= MTDPART_OFS_APPEND,	/* Offset = 0x1c0000 */
-		.size		= 6 * (64 * 2048),
+		.offset		= MTDPART_OFS_APPEND,	
+#ifdef CONFIG_MACH_WITS
+		.size		= 14 * (64 * 2048),     /* Offset = 0x240000 */
+#else
+		.size		= 6 * (64 * 2048),      /* Offset = 0x1c0000 */
+#endif
 	},
 	{
 		.name		= "Kernel-NAND",
