@@ -40,12 +40,17 @@
 #include "../codecs/cs42l52.h"
 
 /* CDB42L52 Y1 (12.288 MHz) )oscillator =  MCLK1 */
-// #define CDB42L52_DEFAULT_MCLK		12288000
-// #define CDB42L52_DEFAULT_MCLK		6144000
-#define CDB42L52_DEFAULT_MCLK		        26000000
+// #define CS42L52_DEFAULT_MCLK		12288000
+// #define CS42L52_DEFAULT_MCLK		6144000
+// #define CS42L52_DEFAULT_MCLK		        26000000
+#define CS42L52_DEFAULT_MCLK		        12000000
 #define CS42L52_FMT_I2S 
 
 static struct snd_soc_card snd_soc_omap3cs42l52;
+
+static struct clk *clkout2_src_ck;
+static struct clk *sys_clkout2;
+static struct clk *cm_96m_fck;
 
 struct omap3_sl_clk 
 {
@@ -119,6 +124,13 @@ static int omap3cs42l52_set_sysclk_div(struct snd_soc_dai* cpu_dai,
 	return -EINVAL;
 }
 
+static int omap3cs42l52_startup(struct snd_pcm_substream *substream) {
+        return clk_enable(sys_clkout2);
+}
+
+static void omap3cs42l52_shutdown(struct snd_pcm_substream *substream) {
+        clk_disable(sys_clkout2);
+}
 
 static int omap3cs42l52_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_hw_params *params)
@@ -130,7 +142,7 @@ static int omap3cs42l52_hw_params(struct snd_pcm_substream *substream,
 	int ret;
 
 	/* OMAP3 McBSP Master <=> CS42L52 Slave */
-	fmt =	SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
+	fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
 	    | SND_SOC_DAIFMT_CBS_CFS;
 
 	/* Set codec DAI configuration */
@@ -148,7 +160,7 @@ static int omap3cs42l52_hw_params(struct snd_pcm_substream *substream,
 	}
 
 	ret = snd_soc_dai_set_sysclk(codec_dai, CS42L52_SYSCLK, 
-				CDB42L52_DEFAULT_MCLK, SND_SOC_CLOCK_IN);
+				CS42L52_DEFAULT_MCLK, SND_SOC_CLOCK_IN);
         if (ret < 0) {
                 pr_err("can't set codec clock\n");
                 return ret;
@@ -163,7 +175,9 @@ static int omap3cs42l52_hw_params(struct snd_pcm_substream *substream,
 
 /* OMAP3 I2S */
 static struct snd_soc_ops omap3cs42l52_ops = {
-	.hw_params = omap3cs42l52_hw_params,
+	.startup = omap3cs42l52_startup,
+        .hw_params = omap3cs42l52_hw_params,
+        .shutdown = omap3cs42l52_shutdown,
 };
 
 /* Digital audio interface glue - connects codec <--> CPU */
@@ -191,6 +205,7 @@ static struct platform_device *omap3cs42l52_snd_device;
 static int __init omap3cs42l52_soc_init(void)
 {
 	int ret;
+        struct device *dev;
 
 	pr_info("OMAP3 SoC init .. register DAIs\n");
 
@@ -206,9 +221,49 @@ static int __init omap3cs42l52_soc_init(void)
 	if (ret)
 		goto err1;
 
-	pr_info("OMAP3 SoC init .. register DAIs done\n");
-	return 0;
+	pr_info("OMAP3 SoC init .. register DAIs done .. requesting clock\n");
 
+        dev = &omap3cs42l52_snd_device->dev;
+	
+        clkout2_src_ck = clk_get(dev, "clkout2_src_ck");
+	if (IS_ERR(clkout2_src_ck)) {
+		dev_err(dev, "Could not get clkout2_src_ck clock\n");
+		ret = PTR_ERR(clkout2_src_ck);
+		goto err2;
+	}
+	
+        /*
+	 * Configure 12 MHz output on SYS_CLKOUT2. Therefore we must use
+	 * 96 MHz as its parent in order to get 12 MHz
+	 */
+    
+        cm_96m_fck = clk_get(dev, "cm_96m_fck");
+	if (IS_ERR(cm_96m_fck)) {
+		dev_err(dev, "could not get omap 96M clock\n");
+		ret = PTR_ERR(cm_96m_fck);
+		goto err3;
+	}
+
+	sys_clkout2 = clk_get(dev, "sys_clkout2");
+	if (IS_ERR(sys_clkout2)) {
+		dev_err(dev, "could not get sys_clkout2\n");
+		ret = PTR_ERR(sys_clkout2);
+		goto err4;
+	}
+	
+        clk_set_parent(clkout2_src_ck, cm_96m_fck);
+        clk_set_rate(sys_clkout2, CS42L52_DEFAULT_MCLK);
+        
+        clk_enable(sys_clkout2);
+        pr_info("OMAP3 SoC init .. done\n");
+	
+        return 0;
+err4:
+        clk_put(clkout2_src_ck);
+err3:
+        clk_put(cm_96m_fck);
+err2:
+	platform_device_del(omap3cs42l52_snd_device);
 err1:
 	pr_err("Unable to add platform device\n");
 	platform_device_put(omap3cs42l52_snd_device);
@@ -218,6 +273,9 @@ err1:
 
 static void __exit omap3cs42l52_soc_exit(void)
 {
+	clk_put(sys_clkout2);
+        clk_put(clkout2_src_ck);
+        clk_put(cm_96m_fck);
 	platform_device_unregister(omap3cs42l52_snd_device);
 }
 

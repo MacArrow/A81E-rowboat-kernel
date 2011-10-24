@@ -21,7 +21,7 @@
 
 
 #define CS42L52_NAME 		"CS42L52"
-#define CS42L52_DEFAULT_CLK		12000000
+#define CS42L52_DEFAULT_CLK	12000000
 #define CS42L52_MIN_CLK		11000000
 #define CS42L52_MAX_CLK		27000000
 #define CS42L52_DEFAULT_FORMAT 	SNDRV_PCM_FMTBIT_S16_LE
@@ -244,8 +244,8 @@
 #define MASTERA_VOL	0x20 //0
 #define MASTERB_VOL	0x21 //0
 
-#define HPA_VOL	0x22 //0
-#define HPB_VOL	0x23 //0
+#define HPA_VOL	        0x22 //0
+#define HPB_VOL	        0x23 //0
 #define DEFAULT_HP_VOL	0xF0
 
 #define SPKA_VOL	0x24 //0
@@ -258,7 +258,7 @@
 #define LIMITER_CTL2	0x28 //0x7f
 #define LIMITER_AT_RATE	0x29 //0xc0
 
-#define ALC_CTL	0x2A //0
+#define ALC_CTL	        0x2A //0
 #define ALC_CTL_ALCB_ENABLE	(1 << 7)
 #define ALC_CTL_ALCA_ENABLE	(1 << 6)
 #define ALC_CTL_FASTEST_ATTACK	0
@@ -288,11 +288,13 @@
 #define SPK_STATUS_PIN_SHIFT		3
 #define SPK_STATUS_PIN_HIGH		1
 
-#define TEM_CTL	0x32 //0x3b
+#define TEM_CTL	        0x32 //0x3b
 #define THE_FOLDBACK	0x33 //0
 #define CHARGE_PUMP	0x34 //0x5f
 
 
-#define CS42L52_CACHEREGNUM	56
+#define CS42L52_CACHEREGNUM     53	
+#define CS42L52_FIRSTREG        1 
+#define CS42L52_MAP_FLAG        128 
 
 #endif

@@ -31,6 +31,8 @@
 
 #include "cs42l52.h"
 
+// #define CONFIG_MANUAL_CLK
+
 struct sp_config {
 	u8 spc, format, spfs;
 	u32 srate;
@@ -52,7 +54,7 @@ struct  cs42l52_private {
  * CS42L52 register default value
  */
 
-static const u8 cs42l52_reg[] = {
+static const u8 cs42l52_reg[CS42L52_CACHEREGNUM] = {
 	0x00, 0xE0, 0x01, 0x07, 0x05, /*4*/
 	0xa0, 0x00, 0x00, 0x81, /*8*/
 	0x81, 0xa5, 0x00, 0x00, /*12*/
@@ -72,7 +74,7 @@ static inline unsigned cs42l52_read_reg_cache(struct snd_soc_codec *codec,
 		u_int reg)
 {
         u8 *cache = codec->reg_cache;
-        printk("VMAK: reading reg %x from cache\n", reg); 
+        dev_dbg(codec->dev, "reading reg 0x%02x from cache\n", reg); 
 	return reg > CS42L52_CACHEREGNUM ? -EINVAL : cache[reg];
 }
 
@@ -85,12 +87,12 @@ static inline void cs42l52_write_reg_cache(struct snd_soc_codec *codec,
 	cache[reg] = val & 0xff;
 }
 
-static inline int cs42l52_write_reg(struct snd_soc_codec *codec,
+static int cs42l52_write_reg(struct snd_soc_codec *codec,
                 u_int reg, u_int val)
 {
         int ret = 0;
         u8 data[2];
-        printk("VMAK: writing %x to reg %x to CS42L52\n",
+        dev_dbg(codec->dev,"writing %02x to reg 0x%02x to CS42L52\n",
                 val, reg);
         data[0] = reg & 0xff;
         data[1] = val & 0xff;
@@ -103,38 +105,29 @@ static inline int cs42l52_write_reg(struct snd_soc_codec *codec,
         return ret;
 }
 
-static inline int cs42l52_get_revison(struct snd_soc_codec *codec)
+static int cs42l52_fill_cache(struct snd_soc_codec *codec)
 {
-	u8 data;
-        u8 addr;
-	int ret;
+        u8 *cache = codec->reg_cache;
+        struct i2c_client *i2c_client = codec->control_data;
+        s32 length;
 
-	// struct cs42l52_private *info = snd_soc_codec_get_drvdata(codec);
+        length = i2c_smbus_read_i2c_block_data(i2c_client
+                    ,CS42L52_FIRSTREG | CS42L52_MAP_FLAG 
+                    ,I2C_SMBUS_BLOCK_MAX
+                    ,&cache[CS42L52_FIRSTREG]);
+        
+        length += i2c_smbus_read_i2c_block_data(i2c_client
+                    ,I2C_SMBUS_BLOCK_MAX | CS42L52_MAP_FLAG 
+                    ,CS42L52_CACHEREGNUM - I2C_SMBUS_BLOCK_MAX
+                    ,&cache[I2C_SMBUS_BLOCK_MAX]);
 
-        data = snd_soc_read(codec, CS42L52_CHIP);
-        if((data & CHIP_ID_MASK) != CHIP_ID )
-        {
-                ret = -ENODEV;
+        if (length != CS42L52_CACHEREGNUM) {
+                dev_err(codec->dev, "i2c read failure, addr=0x%x, length=%d\n",
+                       i2c_client->addr, length);
+                return -EIO;
         }
 
-        return data;
-		
-	if(codec->hw_write(codec->control_data, &addr, 1) == 1)
-	{
-		if(codec->hw_read(codec->control_data, 1) == 1)
-		{
-			if((data & CHIP_ID_MASK) != CHIP_ID )
-			{
-				ret = -ENODEV;
-			}
-		}
-		else
-			ret = -EIO;
-	}
-	else
-		ret = -EIO;
-
-	return ret < 0 ? ret : data;
+        return 0;
 }
 
 /**
@@ -322,24 +315,19 @@ int cs42l52_put_volsw_2r(struct snd_kcontrol *kcontrol,
 		{.reg = xreg, .rreg = xrreg, .max = xmax, .min = xmin} }
 
 /* Analog Input PGA Mux */
-static const char *cs42l52_pgaa_text[] = { "AIN1A to PGA", "AIN2A to PGA", "placeholder", "AIN3A to PGA", "placeholder", "placeholder", "AIN4A to PGA", "placeholder", "placeholder", "placeholder", "MICA to PGA" };
-static const char *cs42l52_pgab_text[] = { "AIN1B to PGA", "AIN2B to PGA", "placeholder", "AIN3B to PGA", "placeholder", "placeholder", "AIN4B to PGA", "placeholder", "placeholder", "placeholder", "MICB to PGA" };
+static const struct snd_kcontrol_new pgaa_mux[] = {
+        SOC_DAPM_SINGLE("AIN1A to PGA", ADC_PGA_A, 0, 1, 0),
+        SOC_DAPM_SINGLE("AIN2A to PGA", ADC_PGA_A, 1, 1, 0),
+        SOC_DAPM_SINGLE("AIN3A to PGA", ADC_PGA_A, 2, 1, 0),
+        SOC_DAPM_SINGLE("AIN4A to PGA", ADC_PGA_A, 3, 1, 0),
+};
 
-static const struct soc_enum pgaa_enum = 
-	SOC_ENUM_SINGLE(ADC_PGA_A, 0, 
-		ARRAY_SIZE(cs42l52_pgaa_text), cs42l52_pgaa_text);
-
-static const struct soc_enum pgab_enum = 
-	SOC_ENUM_SINGLE(ADC_PGA_B, 0,
-		ARRAY_SIZE (cs42l52_pgab_text), cs42l52_pgab_text);
-
-static const struct snd_kcontrol_new pgaa_mux =
-// SOC_DAPM_ENUM("Left Analog Input Capture Mux", pgaa_enum);
-SOC_DAPM_ENUM("Route", pgaa_enum);
-
-static const struct snd_kcontrol_new pgab_mux =
-// SOC_DAPM_ENUM("Right Analog Input Capture Mux", pgab_enum);
-SOC_DAPM_ENUM("Route", pgab_enum);
+static const struct snd_kcontrol_new pgab_mux[] = {
+        SOC_DAPM_SINGLE("AIN1B to PGA", ADC_PGA_B, 0, 1, 0),
+        SOC_DAPM_SINGLE("AIN2B to PGA", ADC_PGA_B, 1, 1, 0),
+        SOC_DAPM_SINGLE("AIN3B to PGA", ADC_PGA_B, 2, 1, 0),
+        SOC_DAPM_SINGLE("AIN4B to PGA", ADC_PGA_B, 3, 1, 0),
+};
 
 /* Analog Input ADC Mux */
 static const char *cs42l52_adca_text[] = { "AIN1A to ADC", "AIN2A to ADC", "AIN3A to ADC", "AIN4A to ADC" };
@@ -347,11 +335,11 @@ static const char *cs42l52_adcb_text[] = { "AIN1B to ADC", "AIN2B to ADC", "AIN3
 
 static const struct soc_enum adca_enum = 
 	SOC_ENUM_SINGLE(ADC_PGA_A, 5, 
-		ARRAY_SIZE(cs42l52_adca_text), cs42l52_pgaa_text);
+		ARRAY_SIZE(cs42l52_adca_text), cs42l52_adca_text);
 
 static const struct soc_enum adcb_enum = 
 	SOC_ENUM_SINGLE(ADC_PGA_B, 5,
-		ARRAY_SIZE (cs42l52_adcb_text), cs42l52_pgab_text);
+		ARRAY_SIZE(cs42l52_adcb_text), cs42l52_adcb_text);
 
 static const struct snd_kcontrol_new adca_mux =
 SOC_DAPM_ENUM("Route", adca_enum);
@@ -415,26 +403,33 @@ static const struct soc_enum ng_type_enum =
 
 
 static const struct snd_kcontrol_new cs42l52_snd_controls[] = {
-  
-SOC_DOUBLE_R_S8_C_TLV("Master Playback Volume", MASTERA_VOL,
-		       MASTERB_VOL, 0xe4, 0x34, hl_tlv),
+    SOC_DOUBLE_R_S8_C_TLV("Master Playback Volume", MASTERA_VOL,
+                           MASTERB_VOL, 0xe4, 0x34, hl_tlv),
+    SOC_DOUBLE("Master Playback Switch", PB_CTL1, 1, 0, 1, 1),
 
-/* Headphone */		   
-SOC_DOUBLE_R_S8_C_TLV("HP Digital Playback Volume", HPA_VOL, 
-		       HPB_VOL, 0xff, 0x1, hl_tlv),
-		       
-SOC_SINGLE_S8_C_TLV("HP Analog Playback Volume", 
-		     PB_CTL1, 5, 7, 0, hpaloa_tlv),
-		     
-SOC_SINGLE("HP Digital Playback Switch", 
-		     PB_CTL2, 6, 7, 1),
+    SOC_DOUBLE_R_S8_C_TLV("PCM Mixer Playback Volume", 
+                          PCMA_MIXER_VOL, PCMB_MIXER_VOL, 0x7f, 0x19, hl_tlv),
+    SOC_DOUBLE_R("PCM Mixer Playback Switch",
+                  PCMA_MIXER_VOL, PCMB_MIXER_VOL, 7, 1, 1),
+    SOC_DOUBLE("PCM Invert Switch", PB_CTL1, 3, 2, 1, 0),
 
-/* Speaker */
-SOC_DOUBLE_R_S8_C_TLV("Speaker Playback Volume", SPKA_VOL,
-		       SPKB_VOL, 0xff, 0x1, hl_tlv),
-SOC_SINGLE("Speaker Playback Switch", 
-		     PB_CTL2, 4, 5, 1),		       
+    SOC_SINGLE_S8_C_TLV("Treble Gain Playback Volume",
+                         TONE_CTL, 4, 15, 1, hl_tlv),
+    SOC_SINGLE_S8_C_TLV("Bass Gain Playback Volume", 
+                         TONE_CTL, 0, 15, 1, hl_tlv),
 
+    /* Speaker */
+    SOC_DOUBLE_R_S8_C_TLV("Speaker Gain", SPKA_VOL,
+                           SPKB_VOL, 0xff, 0x1, hl_tlv),
+
+    /* Headphone */		   
+    SOC_DOUBLE_R_S8_C_TLV("Headphones Gain", HPA_VOL, 
+                           HPB_VOL, 0xff, 0x1, hl_tlv),
+
+    /* Beep */
+    SOC_DOUBLE("Beep", BEEP_TONE_CTL, 7, 6, 1, 0),
+                           
+#if 0
 /* Passthrough */		       
 SOC_DOUBLE_R_S8_C_TLV("Passthru Playback Volume", PASSTHRUA_VOL, 
 		      PASSTHRUB_VOL, 0x90, 0x88, hl_tlv),
@@ -447,32 +442,18 @@ SOC_DOUBLE_R_S8_C_TLV("Mic Gain Capture Volume", MICA_CTL,
 /* ADC */	      
 SOC_DOUBLE_R_S8_C_TLV("ADC Capture Volume", ADCA_VOL, 
 		       ADCB_VOL, 0x80, 0xA0, ipd_tlv),	    
-SOC_DOUBLE_R_S8_C_TLV("ADC Mixer Capture Volume", 
-		       ADCA_MIXER_VOL, ADCB_MIXER_VOL, 0x7f, 0x19, ipd_tlv),
-		       
+
+    SOC_DOUBLE_R_S8_C_TLV("ADC Mixer Capture Volume", 
+                           ADCA_MIXER_VOL, ADCB_MIXER_VOL, 0x7f, 0x19, ipd_tlv),
+    SOC_DOUBLE_R("ADC Mixer Capture Switch", 
+                  ADCA_MIXER_VOL, ADCB_MIXER_VOL, 7, 1, 0),		
+	      
 SOC_DOUBLE("ADC Switch", ADC_MISC_CTL, 0, 1, 1, 1),
 
-SOC_DOUBLE_R("ADC Mixer Switch", 
-	      ADCA_MIXER_VOL, ADCB_MIXER_VOL, 7, 1, 1),		
-	      
 SOC_DOUBLE_R_S8_C_TLV("PGA Volume", PGAA_CTL, PGAB_CTL, 0x30, 0x18, micpga_tlv),		       
-
-
-SOC_DOUBLE_R("PCM Mixer Playback Switch",
-	      PCMA_MIXER_VOL, PCMB_MIXER_VOL, 7, 1, 1),
-
-
-		       
-SOC_DOUBLE_R_S8_C_TLV("PCM Mixer Playback Volume", 
-		      PCMA_MIXER_VOL, PCMB_MIXER_VOL, 0x7f, 0x19, hl_tlv),
 		       
 SOC_SINGLE_S8_C_TLV("Beep Volume", BEEP_VOL, 0, 0x1f, 0x07, hl_tlv),
 		     
-SOC_SINGLE_S8_C_TLV("Treble Gain Playback Volume",
-		     TONE_CTL, 4, 15, 1, hl_tlv),
-SOC_SINGLE_S8_C_TLV("Bass Gain Playback Volume", 
-		     TONE_CTL, 0, 15, 1, hl_tlv),
-
 		     
 /* Limiter */		     
 SOC_SINGLE_TLV("Limiter Max Threshold Volume", 
@@ -525,11 +506,11 @@ SOC_SINGLE("Batt Compensation Switch", BATT_COMPEN, 7, 1, 0),
 SOC_SINGLE("Batt VP Monitor Switch", BATT_COMPEN, 6, 1, 0),
 SOC_SINGLE("Batt VP ref", BATT_COMPEN, 0, 0x0f, 0),
 SOC_SINGLE("Playback Charge Pump Freq", CHARGE_PUMP, 4, 15, 0),
-
+#endif
 };
 
 static const struct snd_soc_dapm_widget cs42l52_dapm_widgets[] = {
-
+#if 0
         /* Analog and mic inputs */	
 	SND_SOC_DAPM_INPUT("INPUT1A"),
 	SND_SOC_DAPM_INPUT("INPUT2A"),
@@ -539,8 +520,8 @@ static const struct snd_soc_dapm_widget cs42l52_dapm_widgets[] = {
 	SND_SOC_DAPM_INPUT("INPUT2B"),
 	SND_SOC_DAPM_INPUT("INPUT3B"),
 	SND_SOC_DAPM_INPUT("INPUT4B"),
-	SND_SOC_DAPM_INPUT("MICA"),
-	SND_SOC_DAPM_INPUT("MICB"),
+//	SND_SOC_DAPM_INPUT("MICA"),
+//	SND_SOC_DAPM_INPUT("MICB"),
 
 	/* Input path */
 	SND_SOC_DAPM_ADC("ADC Left", "Capture", PWRCTL1, 1, 1),
@@ -559,29 +540,31 @@ static const struct snd_soc_dapm_widget cs42l52_dapm_widgets[] = {
 	SND_SOC_DAPM_DAC("DAC Left", "Playback", SND_SOC_NOPM, 0, 0),
 	SND_SOC_DAPM_DAC("DAC Right", "Playback", SND_SOC_NOPM, 0, 0),
 
-	SND_SOC_DAPM_PGA("HP Amp Left", PWRCTL3, 4, 1, NULL, 0),
-	SND_SOC_DAPM_PGA("HP Amp Right", PWRCTL3, 6, 1, NULL, 0),
+//	SND_SOC_DAPM_PGA("HP Amp Left", PWRCTL3, 4, 1, NULL, 0),
+//	SND_SOC_DAPM_PGA("HP Amp Right", PWRCTL3, 6, 1, NULL, 0),
 
-	SND_SOC_DAPM_PGA("SPK Pwr Left", PWRCTL3, 0, 1, NULL, 0),
-	SND_SOC_DAPM_PGA("SPK Pwr Right", PWRCTL3, 2, 1, NULL, 0),
+//	SND_SOC_DAPM_PGA("SPK Pwr Left", PWRCTL3, 0, 1, NULL, 0),
+//	SND_SOC_DAPM_PGA("SPK Pwr Right", PWRCTL3, 2, 1, NULL, 0),
 
         /* mux */
         SND_SOC_DAPM_MUX("ADC Mux Left", SND_SOC_NOPM, 0, 0, &adca_mux),
         SND_SOC_DAPM_MUX("ADC Mux Right", SND_SOC_NOPM, 0, 0, &adcb_mux),
 
-        SND_SOC_DAPM_MUX("PGA Mux Left", SND_SOC_NOPM, 0, 0, &pgaa_mux),
-        SND_SOC_DAPM_MUX("PGA Mux Right", SND_SOC_NOPM, 0, 0, &pgab_mux),
+        SND_SOC_DAPM_MIXER("PGA Mux Left", SND_SOC_NOPM, 0, 0, 
+                &pgaa_mux[0], ARRAY_SIZE(pgaa_mux)),
+        SND_SOC_DAPM_MIXER("PGA Mux Right", SND_SOC_NOPM, 0, 0, 
+                &pgab_mux[0], ARRAY_SIZE(pgab_mux)),
         
         /* speaker/line-out */
-	SND_SOC_DAPM_OUTPUT("HPA"),
-	SND_SOC_DAPM_OUTPUT("HPB"),
-	SND_SOC_DAPM_OUTPUT("SPKA"),
-	SND_SOC_DAPM_OUTPUT("SPKB"),
-
+//	SND_SOC_DAPM_OUTPUT("HPA"),
+//	SND_SOC_DAPM_OUTPUT("HPB"),
+//	SND_SOC_DAPM_OUTPUT("SPKA"),
+//	SND_SOC_DAPM_OUTPUT("SPKB"),
+#endif
 };
 
 static const struct snd_soc_dapm_route cs42l52_audio_map[] = {
-
+#if 0
 	/* input select path */
 	{"PGA Mux Left", "AIN1A to PGA", "INPUT1A"},
 	{"PGA Mux Right", "AIN1B to PGA", "INPUT1B"},
@@ -591,22 +574,22 @@ static const struct snd_soc_dapm_route cs42l52_audio_map[] = {
         {"PGA Mux Right", "AIN3B to PGA", "INPUT3B"},
 	{"PGA Mux Left", "AIN4A to PGA", "INPUT4A"},
         {"PGA Mux Right", "AIN4B to PGA", "INPUT4B"},
-	{"PGA Mux Left", "MICA to PGA", "MICA"},
-        {"PGA Mux Right", "MICB to PGA", "MICB"},
+//	{"PGA Mux Left", "MICA to PGA", "MICA"},
+//      {"PGA Mux Right", "MICB to PGA", "MICB"},
 
 	{"PGA Left", NULL, "PGA Mux Left"},
 	{"PGA Right", NULL, "PGA Mux Right"},
 
 /* Output map */
 	/* Headphone */
-	{"HPA", NULL, "HP Amp Left"},
-	{"HPB", NULL, "HP Amp Right"},
+//	{"HPA", NULL, "HP Amp Left"},
+//	{"HPB", NULL, "HP Amp Right"},
 
 	/* Speakers */
 	
-	{"SPKA", NULL, "SPK Pwr Left"},
-	{"SPKB", NULL, "SPK Pwr Right"},
-
+//	{"SPKA", NULL, "SPK Pwr Left"},
+//	{"SPKB", NULL, "SPK Pwr Right"},
+#endif
 };
 
 #define SOC_CS42L52_RATES ( SNDRV_PCM_RATE_8000  | SNDRV_PCM_RATE_11025 | \
@@ -733,7 +716,6 @@ static int cs42l52_set_fmt(struct snd_soc_dai *codec_dai, unsigned int fmt)
 	int ret = 0;
 	u8 iface = 0;
 	
-	dev_info(codec->dev,"Enter soc_cs42l52_set_fmt\n"); 
 	/* set master/slave audio interface */
         switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
 
@@ -821,6 +803,7 @@ static int cs42l52_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct cs42l52_private *priv = snd_soc_codec_get_drvdata(codec);
 	u32 clk = 0;
 	int index = cs42l52_get_clk(priv->sysclk, params_rate(params));
+        int ret = 0;
 
 	if(index >= 0)
 	{
@@ -835,8 +818,7 @@ static int cs42l52_pcm_hw_params(struct snd_pcm_substream *substream,
 #else
 		snd_soc_write(codec, CLK_CTL, 0xa0);
 #endif
-		snd_soc_write(codec, IFACE_CTL1, priv->config.format );
-
+		ret = snd_soc_write(codec, IFACE_CTL1, priv->config.format );
 	}
 	else{
 		dev_err(codec->dev,"can't find out right mclk\n");
@@ -935,17 +917,22 @@ static int cs42l52_resume(struct snd_soc_codec *codec)
 }
 
 /* page 37 from cs42l52 datasheet */
-static void cs42l52_required_setup(struct snd_soc_codec *codec)
+static void cs42l52_required_setup(struct i2c_client *i2c_client)
 {
 	u8 data;
-	snd_soc_write(codec, 0x00, 0x99);
-	snd_soc_write(codec, 0x3e, 0xba);
-	snd_soc_write(codec, 0x47, 0x80);
-	data = snd_soc_read(codec, 0x32);
-	snd_soc_write(codec, 0x32, data | 0x80);
-	snd_soc_write(codec, 0x32, data & 0x7f);
-	snd_soc_write(codec, 0x00, 0x00);
+	i2c_smbus_write_byte_data(i2c_client, 0x00, 0x99);
+	i2c_smbus_write_byte_data(i2c_client, 0x3e, 0xba);
+	i2c_smbus_write_byte_data(i2c_client, 0x47, 0x80);
+        data = i2c_smbus_read_byte_data(i2c_client, 0x32);
+	i2c_smbus_write_byte_data(i2c_client, 0x32, data | 0x80);
+	i2c_smbus_write_byte_data(i2c_client, 0x32, data & 0x7f);
+	i2c_smbus_write_byte_data(i2c_client, 0x00, 0x00);
+
+        //Debug
+	i2c_smbus_write_byte_data(i2c_client, 0x1c, (0b0111 << 4) | 0b0011);
+	i2c_smbus_write_byte_data(i2c_client, 0x1d, 0b00110);
 }
+
 
 static int cs42l52_probe(struct snd_soc_codec *codec)
 {
@@ -955,7 +942,6 @@ static int cs42l52_probe(struct snd_soc_codec *codec)
         codec->control_data = info->control_data;
         codec->hw_write = info->hw_write;
 
-        ret = snd_soc_codec_set_cache_io(codec, 8, 16, info->control_type);
         if (ret != 0) {
                 dev_err(codec->dev, "Failed to set cache I/O: %d\n", ret);
                 return ret;
@@ -964,10 +950,9 @@ static int cs42l52_probe(struct snd_soc_codec *codec)
 	info->sysclk = CS42L52_DEFAULT_CLK;
 	info->config.format = CS42L52_DEFAULT_FORMAT;
 
+        cs42l52_fill_cache(codec);
 
-	cs42l52_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
-	
-	cs42l52_required_setup(codec);
+        cs42l52_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 	
 	info->flags |= CS42L52_CHIP_SWICTH;
 	info->flags &= ~(CS42L52_CHIP_SWICTH);
@@ -1032,6 +1017,8 @@ static int cs42l52_i2c_probe(struct i2c_client *i2c_client,
                 return -ENODEV;
         }
         dev_info(&i2c_client->dev,"Cirrus CS42L52 codec , revision %d\n", ret & CHIP_REV_MASK);
+	
+        cs42l52_required_setup(i2c_client);
 	
         cs42l52 = kzalloc(sizeof(struct cs42l52_private), GFP_KERNEL);
 	if (!cs42l52) {
